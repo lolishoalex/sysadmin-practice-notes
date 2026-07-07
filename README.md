@@ -1,11 +1,13 @@
 # My practice list in DevOps/DevNet:
 
+## backups
+
 ## cloudflare
 
 ## migrations
 
 ## nginx
 
-## SSL_TLS
+## SSH users groups sudo
 
-## backups
+## SSL_TLS
