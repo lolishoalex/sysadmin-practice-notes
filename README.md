@@ -4,6 +4,8 @@
 
 ## cloudflare
 
+## journald
+
 ## migrations
 
 ## nginx
@@ -11,3 +13,4 @@
 ## SSH users groups sudo
 
 ## SSL_TLS
+
