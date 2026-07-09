@@ -451,3 +451,259 @@ sudo certbot renew --dry-run
 ### Умова 5: webroot для certbot відповідає поточному document root nginx
 
 **Якщо зміниться:** certbot писатиме challenge-файли в стару папку, а nginx шукатиме в новій → 404 на challenge → оновлення впаде.
+
+## Сертифікат оновився автоматично!
+
+Що робимо далі — перевірки
+
+Перевірка 1 — сертифікат на диску оновлений
+
+```bash
+sudo certbot certificates
+```
+
+Перевірка 2 — nginx насправді використовує новий сертифікат
+
+```bash
+echo | openssl s_client -connect 127.0.0.1:443 -servername example.com 2>/dev/null | openssl x509 -noout -issuer -subject -dates
+```
+
+Перевірка 3 — post_hook відпрацював
+
+```bash
+sudo tail -50 /var/log/letsencrypt/letsencrypt.log
+```
+
+Також перевіримо journalctl:
+
+```bash
+sudo journalctl -u certbot.service --since "24 hours ago" --no-pager | tail -30
+```
+
+Перевірка 4 — Cloudflare теж бачить новий сертифікат origin
+
+Пам'ятаємо: у Cloudflare режим Full (Strict) — вона перевіряє сертифікат origin. Раз сайт працює — все ок. Але можна переконатись напряму:
+
+Просто відкрийте `https://example.com/` у браузері. Якщо все працює як завжди — значить, Cloudflare може достукатись до origin.
+
+Або через DevTools (F12 → Network → перезавантажити сторінку) можна побачити заголовки Cloudflare `cf-ray`, `server: cloudflare` — це підтверджує, що Cloudflare нормально обслуговує сайт.
+
+Все спрацювало ідеально
+
+## Відкладені задачі (новий сервер):
+
+### Видалити example.com.conf.disabled
+
+Перевірити, що файл справді порожній і на місці
+
+```bash
+sudo ls -la /etc/letsencrypt/renewal/
+sudo cat /etc/letsencrypt/renewal/example.com.conf.disabled
+```
+
+Видалити
+
+```bash
+sudo rm /etc/letsencrypt/renewal/example.com.conf.disabled
+```
+
+Перевірити результат
+
+```bash
+sudo ls -la /etc/letsencrypt/renewal/
+```
+
+### Видалити стару папку /etc/letsencrypt/live/example.com/
+
+Перевірити, що nginx не посилається на стару папку
+
+```bash
+sudo grep -rE 'example\.com(/|$)' /etc/nginx/ 2>/dev/null | grep -v -- '-0001' | grep -i cert
+```
+
+Подивитись, що саме будемо видаляти (для протоколу)
+
+```bash
+sudo ls -la /etc/letsencrypt/live/example.com/
+sudo ls -la /etc/letsencrypt/archive/example.com/
+```
+
+Створити резервну копію перед видаленням
+
+```bash
+sudo tar czf /root/old-cert-backup-$(date +%Y%m%d).tar.gz /etc/letsencrypt/live/example.com/ /etc/letsencrypt/archive/example.com/
+```
+
+Видалення
+
+Спочатку перевіримо, що certbot не бачить цей сертифікат (щоб потім не було "де він дівся"):
+
+```bash
+sudo certbot certificates 2>&1 | grep -i example.com
+```
+
+Тепер видаляємо
+
+Спроба через certbot (правильний спосіб)
+
+⚠️ Умовно змінна. Якщо certbot не знайде — просто відмовиться, нічого не зіпсує.
+Швидше за все відповість щось на кшталт "No certificate found with name example.com". Це нормально — переходимо до ручного видалення.
+
+```bash
+sudo certbot delete --cert-name example.com
+```
+
+Ручне видалення папок
+
+```bash
+sudo rm -rf /etc/letsencrypt/live/example.com/
+sudo rm -rf /etc/letsencrypt/archive/example.com/
+```
+
+Після видалення — три швидкі перевірки
+
+```bash
+sudo ls /etc/letsencrypt/live/
+sudo ls /etc/letsencrypt/archive/
+```
+
+Certbot працює як зазвичай
+
+```bash
+sudo certbot certificates
+```
+
+Сайт живий
+
+```bash
+curl -sI https://example.com | head -5
+```
+
+### Прибрати OCSP stapling з nginx (косметика)
+
+У nginx-конфігу десь є директиви `ssl_stapling on;` та (ймовірно) `ssl_stapling_verify on;`. Треба їх або закоментувати (додати `#`), або вимкнути (`off`), або видалити. Рекомендація — закоментувати: це найбезпечніший спосіб (можна легко повернути назад, якщо щось піде не так).
+
+Це задача зі змінами в nginx-конфігу — тому робимо особливо обережно, з бекапом.
+
+Знайти, де саме увімкнено stapling
+
+```bash
+sudo grep -rn 'ssl_stapling' /etc/nginx/
+```
+
+Перевірити поточний стан nginx перед змінами
+
+```bash
+sudo nginx -t
+```
+
+Подивитись контекст рядків, щоб знати, що редагуємо
+
+```bash
+sudo sed -n '40,50p' /etc/nginx/nginx.conf
+```
+
+Бекап обох файлів перед змінами
+
+```bash
+sudo cp /etc/nginx/nginx.conf /root/nginx.conf.backup-$(date +%Y%m%d)
+sudo cp /etc/nginx/sites-available/example.com-full.conf /root/example.com-full.conf.backup-$(date +%Y%m%d)
+```
+
+Перевірка, що бекапи створились:
+
+```bash
+sudo ls -la /root/*.backup-$(date +%Y%m%d)
+```
+
+Закоментувати рядки в /etc/nginx/nginx.conf
+
+> ⚠️ Номери рядків (44, 45) і кількість пробілів у ваших файлах можуть відрізнятись — спочатку подивіться контекст через `sed -n` і скоригуйте команди.
+
+```bash
+sudo sed -i '44s/^        ssl_stapling on;/#        ssl_stapling on;/' /etc/nginx/nginx.conf
+sudo sed -i '45s/^        ssl_stapling_verify on;/#        ssl_stapling_verify on;/' /etc/nginx/nginx.conf
+```
+
+Перевірка результату:
+
+```bash
+sudo sed -n '40,50p' /etc/nginx/nginx.conf
+```
+
+Закоментувати рядки в example.com-full.conf
+
+```bash
+sudo sed -i '64s/^     ssl_stapling on;/#     ssl_stapling on;/' /etc/nginx/sites-available/example.com-full.conf
+sudo sed -i '65s/^     ssl_stapling_verify on;/#     ssl_stapling_verify on;/' /etc/nginx/sites-available/example.com-full.conf
+```
+
+Перевірка результату:
+
+```bash
+sudo sed -n '60,70p' /etc/nginx/sites-available/example.com-full.conf
+```
+
+Перевірити синтаксис nginx (найважливіше!)
+
+```bash
+sudo nginx -t
+```
+
+Застосувати зміни (перезавантаження nginx)
+
+```bash
+sudo systemctl reload nginx
+```
+
+Перевірити статус:
+
+```bash
+sudo systemctl status nginx --no-pager
+```
+
+Фінальні перевірки: nginx -t тепер має бути повністю чистим, сайт відповідає, сертифікат той же самий (не постраждав)
+
+```bash
+sudo nginx -t
+curl -sI https://example.com | head -5
+echo | openssl s_client -connect 127.0.0.1:443 -servername example.com 2>/dev/null | openssl x509 -noout -issuer -subject -dates
+```
+
+## Відкладені задачі (старий сервер):
+
+Стратегія — "старий сервер це холодний резерв"
+
+Логіка: старий сервер потрібен на випадок, якщо новий впаде. Тоді треба:
+
+1. Перемкнути DNS на старий
+2. Виконати
+
+```bash
+certbot renew --force-renewal
+```
+
+(щоб отримати свіжий сертифікат)
+
+3. Сайт запрацює
+
+Що з цього випливає:
+
+- Сертифікат може бути прострочений — це не критично, головне щоб certbot міг оновити при потребі
+- Треба переконатись, що certbot на старому сервері працездатний — конфіги валідні, таймер увімкнено, webroot доступний
+- Треба виправити ті самі 3 задачі, що ми зробили на новому, щоб коли перемкнемо DNS — все "просто працювало".
+
+_Важливо_:
+
+Автоматичне оновлення сертифіката на старому сервері (`203.0.113.10`) працює через authorization cache Let's Encrypt — а не через власний challenge. Це працює тільки поки новий сервер регулярно оновлюється. При переключенні DNS на старий:
+
+- Виконати `sudo certbot renew --force-renewal` для повної незалежної валідації
+- Якщо challenge провалиться (мало ймовірно, але можливо), проаналізувати логи
+
+Файли `webroot_map` на старому сервері порожні — це не критично, поки використовується authorization cache. Але при `--force-renewal` через власний challenge — треба буде додати `example.com = /var/www/html` і подібне.
+
+Прибираємо ті самі проблеми:
+
+- Прибрати OCSP stapling з nginx (косметика)
+- Видалити example.com.conf.disabled
+- Видалити стару папку /etc/letsencrypt/live/example.com/
