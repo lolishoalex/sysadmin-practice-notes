@@ -4,11 +4,15 @@
 
 ## cloudflare
 
+## http
+
 ## journald
 
 ## migrations
 
 ## nginx
+
+## server load diagnostics
 
 ## SSH users groups sudo
 
