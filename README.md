@@ -4,6 +4,8 @@
 
 ## cloudflare
 
+## google search console errors
+
 ## http
 
 ## journald
@@ -17,4 +19,3 @@
 ## SSH users groups sudo
 
 ## SSL_TLS
-
